@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>APTime — Free Slot Finder</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════
+     FRAME 1 — Full screen centered input
+════════════════════════════════════════════════ -->
+<div id="frame1" class="frame1">
+  <div class="f1-wrap">
+
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="APTime" class="f1-logo">
+    <h1 class="f1-title">Find <em>Free Slots</em> Across Intakes</h1>
+    <p class="f1-sub">Compare timetables from multiple intakes and find when everyone is free to hang out.</p>
+
+    <div class="f1-card">
+
+      <!-- Intake input -->
+      <div class="form-label">Add Intake Codes</div>
+      <div class="input-row">
+        <input type="text" id="intakeInput" class="f-input" placeholder="e.g. APU2F2511SE" maxlength="20"/>
+        <select id="groupSelect" class="f-select">
+          <option value="">No Group</option>
+          <option value="G1">G1</option>
+          <option value="G2">G2</option>
+          <option value="G3">G3</option>
+          <option value="G4">G4</option>
+          <option value="G5">G5</option>
+        </select>
+        <button class="btn-add" onclick="addIntake()">+ Add</button>
+      </div>
+      <p class="form-hint">Group is optional — only select if your intake is split into groups.</p>
+      <div class="intake-list" id="intakeList"></div>
+
+      <!-- Week selection — appears once 2+ intakes added -->
+      <div id="weekSection" style="display:none;">
+        <div class="form-label" style="margin-top:14px;">Select Week</div>
+        <div class="week-chips" id="weekChips">
+          <span class="week-loading">Loading weeks...</span>
+        </div>
+      </div>
+
+      <!-- Min gap -->
+      <div class="form-label" style="margin-top:14px;">Minimum Free Time Needed</div>
+      <div class="gap-row">
+        <label>Min gap:</label>
+        <input type="range" id="minGap" min="15" max="180" step="15" value="60" oninput="updateGapLabel()">
+        <span class="gap-val" id="gapVal">60 mins</span>
+      </div>
+
+      <div class="status" id="status">
+        <div class="spinner"></div>
+        <span id="statusText"></span>
+      </div>
+
+      <button class="btn-find" id="findBtn" onclick="goFrame2()" disabled>
+        Find Common Free Slots →
+      </button>
+
+    </div><!-- f1-card -->
+  </div><!-- f1-wrap -->
+</div><!-- frame1 -->
+
+<!-- ═══════════════════════════════════════════════
+     FRAME 2 — Dashboard
+════════════════════════════════════════════════ -->
+<div id="frame2" class="frame2" style="display:none;">
+
+  <!-- LEFT — same info from frame 1 -->
+  <div class="f2-left">
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="APTime" class="f2-logo">
+    <h2 class="f2-title">Find <em>Free Slots</em> Across Intakes</h2>
+    <p class="f2-sub">Compare timetables and find when everyone is free to hang out.</p>
+
+    <div class="f2-section-label">Intakes</div>
+    <div id="f2-intakeList" class="intake-list"></div>
+
+    <div class="f2-section-label" style="margin-top:14px;">Week</div>
+    <div id="f2-weekLabel" class="f2-week-label"></div>
+
+    <div class="f2-section-label" style="margin-top:14px;">Min Free Time</div>
+    <div id="f2-gapLabel" class="f2-week-label"></div>
+
+    <button class="btn-back" onclick="backToFrame1()">← New Search</button>
+  </div>
+
+  <!-- RIGHT — module filter top, results bottom -->
+  <div class="f2-right">
+
+    <!-- Top: module filter -->
+    <div class="f2-top">
+      <div class="r-panel-title">
+        Filter Elective Modules
+        <span class="r-panel-hint">Tick to ignore, then click Recompute</span>
+      </div>
+      <div id="moduleGrid" class="module-grid"></div>
+      <p id="noCtMsg" class="no-ct" style="display:none">No CT elective modules found for this week.</p>
+      <button class="btn-recompute" id="recomputeBtn" onclick="recompute()" style="display:none">↻ Recompute</button>
+    </div>
+
+    <!-- Bottom: timetable + summary -->
+    <div class="f2-bottom">
+
+      <div class="f2-grid-wrap">
+        <div class="r-panel-title">
+          Timetable Grid
+          <span class="legend-inline">
+            <span class="leg free"></span> Free &nbsp;
+            <span class="leg busy"></span> Busy
+          </span>
+        </div>
+        <div class="timetable-wrap">
+          <table id="timetable"></table>
+        </div>
+      </div>
+
+      <div class="f2-summary-wrap">
+        <div class="r-panel-title">Free Slots</div>
+        <div class="summary" id="summary">
+          <div class="sum-placeholder">Computing...</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const DAYS = ["MON","TUE","WED","THU","FRI"];
+  const DAY_LABELS = {MON:"Monday",TUE:"Tuesday",WED:"Wednesday",THU:"Thursday",FRI:"Friday"};
+  const DAY_SHORT  = {MON:"Mon",TUE:"Tue",WED:"Wed",THU:"Thu",FRI:"Fri"};
+
+  const TIME_SLOTS = [];
+  for(let h=8;h<18;h++){
+    TIME_SLOTS.push({label:fmtH(h,0),mins:h*60});
+    TIME_SLOTS.push({label:fmtH(h,30),mins:h*60+30});
+  }
+  TIME_SLOTS.push({label:"6:00 PM",mins:18*60});
+
+  function fmtH(h,m){
+    const ap=h>=12?"PM":"AM",h12=h%12||12;
+    return `${h12}:${String(m).padStart(2,'0')} ${ap}`;
+  }
+
+  let intakes=[], selectedDatestamp="", selectedWeekLabel="";
+
+  function updateGapLabel(){
+    document.getElementById("gapVal").textContent=document.getElementById("minGap").value+" mins";
+  }
+
+  function setStatus(msg,type=""){
+    document.getElementById("status").className="status "+type;
+    document.getElementById("statusText").textContent=msg;
+  }
+
+  // ── Add intake ─────────────────────────────────────────────────────────────
+  function addIntake(){
+    const input=document.getElementById("intakeInput");
+    const code=input.value.trim().toUpperCase();
+    const group=document.getElementById("groupSelect").value;
+    if(!code) return;
+    if(intakes.find(i=>i.code===code&&i.group===group)){setStatus("Already added.","error");return;}
+    intakes.push({code,group});
+    input.value="";
+    document.getElementById("groupSelect").value="";
+    input.focus();
+    renderIntakeTags("intakeList");
+    setStatus("");
+    if(intakes.length>=2){
+      document.getElementById("findBtn").disabled=false;
+      loadWeeks();
+    }
+  }
+
+  document.getElementById("intakeInput").addEventListener("keydown",e=>{if(e.key==="Enter")addIntake();});
+
+  function removeIntake(idx){
+    intakes.splice(idx,1);
+    renderIntakeTags("intakeList");
+    selectedDatestamp="";
+    selectedWeekLabel="";
+    document.getElementById("weekSection").style.display="none";
+    document.getElementById("findBtn").disabled=intakes.length<2;
+    if(intakes.length>=2) loadWeeks();
+  }
+
+  function renderIntakeTags(targetId){
+    document.getElementById(targetId).innerHTML=intakes.map((item,idx)=>`
+      <div class="intake-tag">
+        ${item.code}${item.group?` <span class="group-badge">${item.group}</span>`:""}
+        ${targetId==="intakeList"?`<button class="remove-btn" onclick="removeIntake(${idx})">×</button>`:""}
+      </div>
+    `).join("");
+  }
+
+  // ── Load weeks ─────────────────────────────────────────────────────────────
+  async function loadWeeks(){
+    const sec=document.getElementById("weekSection");
+    const chips=document.getElementById("weekChips");
+    sec.style.display="block";
+    chips.innerHTML=`<span class="week-loading">Loading weeks...</span>`;
+    try{
+      const res=await fetch("/get-weeks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({intakes})});
+      const data=await res.json();
+      if(!data.weeks||!data.weeks.length){chips.innerHTML=`<span class="week-loading">No weeks found.</span>`;return;}
+      chips.innerHTML=data.weeks.map((w,i)=>`
+        <button class="week-chip ${i===0?"active":""}"
+          onclick="selectWeek('${w.datestamp}','${w.label.replace(/'/g,"\\'")}',this)">
+          ${w.label}
+        </button>
+      `).join("");
+      selectedDatestamp=data.weeks[0].datestamp;
+      selectedWeekLabel=data.weeks[0].label;
+    }catch(e){
+      chips.innerHTML=`<span class="week-loading">Failed to load weeks.</span>`;
+    }
+  }
+
+  function selectWeek(ds,label,el){
+    selectedDatestamp=ds;
+    selectedWeekLabel=label;
+    document.querySelectorAll(".week-chip").forEach(c=>c.classList.remove("active"));
+    el.classList.add("active");
+  }
+
+  // ── Go to Frame 2 ──────────────────────────────────────────────────────────
+  async function goFrame2(){
+    if(intakes.length<2) return;
+    setStatus("Loading modules...","loading");
+    document.getElementById("findBtn").disabled=true;
+
+    try{
+      const mRes=await fetch("/get-modules",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({intakes,datestamp:selectedDatestamp})});
+      const mData=await mRes.json();
+      if(mData.error){setStatus("Error: "+mData.error,"error");document.getElementById("findBtn").disabled=false;return;}
+
+      // Populate Frame 2 left panel
+      renderIntakeTags("f2-intakeList");
+      document.getElementById("f2-weekLabel").textContent = selectedWeekLabel || "All weeks";
+      document.getElementById("f2-gapLabel").textContent  = document.getElementById("minGap").value+" mins";
+
+      // Populate module filter
+      renderModuleGrid(mData.ct_modules);
+
+      // Switch frames with smooth transition
+      document.getElementById("frame1").classList.add("slide-out");
+      const f2 = document.getElementById("frame2");
+      f2.style.display = "flex";
+      // Trigger reflow then animate in
+      requestAnimationFrame(()=>{ requestAnimationFrame(()=>{ f2.classList.add("slide-in"); }); });
+
+      setStatus("");
+      document.getElementById("findBtn").disabled=false;
+
+      // Auto compute
+      await recompute();
+
+    }catch(e){
+      setStatus("Could not connect to server. Is app.py running?","error");
+      document.getElementById("findBtn").disabled=false;
+    }
+  }
+
+  function backToFrame1(){
+    const f1 = document.getElementById("frame1");
+    const f2 = document.getElementById("frame2");
+
+    // Slide f2 out, f1 back in
+    f2.classList.remove("slide-in");
+    f1.classList.remove("slide-out");
+
+    // Hide f2 after animation completes
+    setTimeout(()=>{ f2.style.display="none"; }, 400);
+  }
+
+  // ── Module grid ────────────────────────────────────────────────────────────
+  function renderModuleGrid(modules){
+    const grid=document.getElementById("moduleGrid");
+    const noMsg=document.getElementById("noCtMsg");
+    const btn=document.getElementById("recomputeBtn");
+    if(!modules.length){
+      grid.innerHTML="";
+      noMsg.style.display="block";
+      btn.style.display="none";
+      return;
+    }
+    noMsg.style.display="none";
+    btn.style.display="inline-block";
+    // Show: CT015-3-2-DMTD (Design Methods)
+    grid.innerHTML=modules.map(m=>`
+      <label class="mod-chip" title="${m.name}">
+        <input type="checkbox" value="${m.modid}" class="module-checkbox" onchange="markDirty()">
+        <span><strong>${m.modid}</strong> (${m.name})</span>
+      </label>
+    `).join("");
+  }
+
+  function markDirty(){
+    document.getElementById("recomputeBtn").classList.add("dirty");
+  }
+
+  // ── Recompute ──────────────────────────────────────────────────────────────
+  async function recompute(){
+    document.getElementById("recomputeBtn").classList.remove("dirty");
+    document.getElementById("summary").innerHTML=`<div class="sum-placeholder">Computing...</div>`;
+    document.getElementById("timetable").innerHTML="";
+
+    const ignored=[...document.querySelectorAll(".module-checkbox:checked")].map(c=>c.value);
+    const minGap=parseInt(document.getElementById("minGap").value);
+
+    try{
+      const res=await fetch("/find-slots",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({intakes,min_gap:minGap,ignored_modules:ignored,datestamp:selectedDatestamp})});
+      const result=await res.json();
+      if(result.error){document.getElementById("summary").innerHTML=`<div class="sum-placeholder">${result.error}</div>`;return;}
+      renderTimetable(result.busy_slots,result.free_slots);
+      renderSummary(result.free_slots,minGap);
+    }catch(e){
+      document.getElementById("summary").innerHTML=`<div class="sum-placeholder">Server error.</div>`;
+    }
+  }
+
+  // ── Timetable ──────────────────────────────────────────────────────────────
+  function renderTimetable(busySlots,freeSlots){
+    function isFree(day,s,e){
+      return freeSlots[day].some(slot=>{
+        const fe=slot.end_mins===null?18*60:slot.end_mins;
+        return s>=slot.start_mins&&e<=fe;
+      });
+    }
+    let html=`<thead><tr><th class="tc">Time</th>${DAYS.map(d=>`<th>${DAY_SHORT[d]}</th>`).join("")}</tr></thead><tbody>`;
+    for(let i=0;i<TIME_SLOTS.length-1;i++){
+      const s=TIME_SLOTS[i].mins,e=TIME_SLOTS[i+1].mins;
+      const half=TIME_SLOTS[i].mins%60===30;
+      html+=`<tr><td class="tl">${TIME_SLOTS[i].label}</td>`;
+      for(const day of DAYS){
+        const free=isFree(day,s,e);
+        const pf=i>0&&isFree(day,TIME_SLOTS[i-1].mins,s);
+        const nf=i<TIME_SLOTS.length-2&&isFree(day,e,TIME_SLOTS[i+2].mins);
+        let cls=free?"free":"busy";
+        if(free&&!pf) cls+=" free-start";
+        if(free&&!nf) cls+=" free-end";
+        if(half) cls+=" half-hour";
+        html+=`<td class="${cls}"></td>`;
+      }
+      html+=`</tr>`;
+    }
+    html+=`</tbody>`;
+    document.getElementById("timetable").innerHTML=html;
+  }
+
+  // ── Summary ────────────────────────────────────────────────────────────────
+  function renderSummary(freeSlots,minGap){
+    document.getElementById("summary").innerHTML=DAYS.map(day=>{
+      const slots=freeSlots[day];
+      const rows=slots.length===0
+        ?`<div class="no-slot">No gap ≥ ${minGap} min</div>`
+        :slots.map(slot=>slot.rest_of_day
+          ?`<div class="slot-row rest">${slot.start} onwards →</div>`
+          :`<div class="slot-row">${slot.start} – ${slot.end} <span class="dur">(${slot.duration}m)</span></div>`
+        ).join("");
+      return`<div class="sum-day"><div class="sum-day-name">${DAY_LABELS[day]}</div>${rows}</div>`;
+    }).join("");
+  }
+</script>
+</body>
+</html>
