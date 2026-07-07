@@ -2,7 +2,7 @@
 
 > A web-based timetable comparison tool for APU students. Find common free time slots across multiple intakes instantly.
 
-![APTime](static/logo.png)
+![logo.png](static/logo.png)
 
 ---
 
